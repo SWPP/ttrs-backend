@@ -27,6 +27,7 @@ DEBUG = False
 
 ALLOWED_HOSTS = ['18.219.18.137', 'ttrsweb.com']
 
+CORS_ORIGIN_ALLOW_ALL = True
 
 # Application definition
 
@@ -34,6 +35,7 @@ INSTALLED_APPS = [
     'manager.apps.ManagerConfig',
     'ttrs.apps.TtrsConfig',
     'rest_framework',
+    'corsheaders',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -43,6 +45,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',

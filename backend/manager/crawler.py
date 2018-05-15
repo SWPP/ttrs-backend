@@ -5,10 +5,11 @@ checks cancel_flag of it.
 If cancel_flag is True, it stops current job and set status to 'canceled'.
 """
 
-import os
+import os, time
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException
 
 from ttrs.models import *
 
@@ -20,52 +21,24 @@ sid = {'1학기': 1,
        '겨울학기': 4
 }
 
+total_cnt = 0           # total number of lectures
+total_fin = 0           # number of lectures finished
+total_page = 0          # total number of pages
+total_page_fin = 0      # number of finished pages
+detail = ''             # detail for crawler status
 
-tid = {'교양': 2,
-       '전필': 3,
-       '전선': 4,
-       '일선': 5,
-       '교직': 6,
-       '논문': 7,
-       '대학원': 8,
-       '학사': 9,
-}
 
-fid = {
-    '학문의 기초': 2,
-    '학문의 세계': 3,
-    '선택교양': 4,
-    '전공영역': 5,
-}
+def update(crawler, status, detail):
+    crawler.refresh_from_db()
+    if crawler.cancel_flag:
+        crawler.status = 'canceled: '+detail
+        crawler.save()
+        return False
 
-aid = {
-    '학문의 기초': {
-        '사고와 표현': 2,
-        '외국어': 3,
-        '수량적 분석과 추론': 4,
-        '과학적 사고와 실험': 5,
-        '컴퓨터와 정보 활용': 6,
-    },
-    '학문의 세계': {
-        '언어와 문학': 2,
-        '문화와 예술': 3,
-        '역사와 철학': 4,
-        '정치와 경제': 5,
-        '인간과 사회': 6,
-        '자연과 기술': 7,
-        '생명과 환경': 8,
-    },
-    '선택교양': {
-        '체육': 2,
-        '예술 실기': 3,
-        '대학과 리더십': 4,
-        '창의와 융합': 5,
-        '한국의 이해': 6,
-    },
-    '전공영역': {
-        '전체': 1,
-    },
-}
+    else:
+        crawler.status = status+': '+detail
+        crawler.save()
+        return True
 
 
 def run(crawler):
@@ -77,115 +50,148 @@ def run(crawler):
         options.add_argument('User-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KTHML, like Gecko) Chrome/61.0.3163.100 Safari/537.36')
 
         driver = webdriver.Chrome(driver_path, chrome_options=options)
-        driver.implicitly_wait(3)
+        time.sleep(2)
 
         driver.get('https://sugang.snu.ac.kr/sugang/cc/cc100.action')
-        driver.implicitly_wait(1)
+        time.sleep(1)
         # detailed search
         driver.find_element_by_id('detail_button').click()
-        driver.implicitly_wait(1)
+        time.sleep(2)
         # select year
-        driver.find_element_by_xpath('//*[@id="srchOpenSchyy"]').clear()
-        driver.implicitly_wait(1)
-        driver.find_element_by_xpath('//*[@id="srchOpenSchyy"]').send_keys(crawler.year)
-        driver.implicitly_wait(1)
+        driver.execute_script("document.getElementById('srchOpenSchyy').value = '{}'".format(crawler.year))
+        time.sleep(1)
         # select semester
         driver.find_element_by_xpath('//*[@id="srchOpenShtm"]/option[{}]'.format(sid[crawler.semester])).click()
-        driver.implicitly_wait(1)
+        time.sleep(1)
         # select bachelor's course
         driver.find_element_by_xpath('//*[@id="srchOpenSubmattCorsFg"]/option[2]').click()
-        driver.implicitly_wait(1)
+        time.sleep(1)
 
-        for type in tid:
-            crawl_type(crawler, driver, type)
+        # clicks search button
+        driver.find_element_by_class_name('btn_search_ok').click()
+        
+        global total_cnt
+        global total_fin
+        global total_page
+        global detail
 
-        crawler.status = 'finished {}'.format(total_page)
+        total_cnt = int(driver.find_element_by_xpath('//*[@id="content"]/div/div[3]/div[1]/div[1]/h3/span').text)
+        total_fin = 0
+        total_page = ((total_cnt-1)//10)+1
+        total_page_fin = 0
+        detail = ''
+
+        type_select = driver.find_element_by_xpath('//*[@id="srchOpenSubmattFgCd"]')
+        types = [x.text.strip() for x in type_select.find_elements_by_tag_name('option')]
+        type_cnt = len(types)
+
+        print(types, type_cnt)
+        for t in range(2, type_cnt+1):
+            if update(crawler, 'running', detail):
+                print('start running ', types[t-1])
+                crawl_type(crawler, driver, t, types[t-1])
+            else:
+                return
+
+        crawler.status = 'finished {} lectures'.format(total_fin)
         crawler.save()
 
         driver.close()
 
-    except ObjectDoesNotExist as e:
+    except NoSuchElementException as e:
         print(e)
+        crawler.status = str('finished {} lectures due to error'.format(total_fin))
+        crawler.save()
 
     except Exception as e:
+        print('here!', e)
         crawler.status = str(e)
         crawler.save()
 
 
-def crawl_type(crawler, driver, type):
-    driver.find_element_by_xpath('//*[@id="srchOpenSubmattFgCd"]/option[{}]'.format(tid[type])).click()
+def crawl_type(crawler, driver, tid, type):
+    # clears field and area
+    driver.find_element_by_xpath('//*[@id="srchOpenUpSbjtFldCd"]/option[1]').click()
+    driver.find_element_by_xpath('//*[@id="cond02"]/td[3]/select[2]/option[1]').click()
+
+    # selects type
+    driver.find_element_by_xpath('//*[@id="srchOpenSubmattFgCd"]/option[{}]'.format(tid)).click()
     driver.implicitly_wait(1)
+
+    global total_cnt
+    global total_fin
+    global total_page
+    global total_page_fin
+    global detail
 
     if type != '교양':
         driver.find_element_by_class_name('btn_search_ok').click()
         driver.implicitly_wait(1)
 
-        total_cnt = int(driver.find_element_by_xpath('//*[@id="content"]/div/div[3]/div[1]/div[1]/h3/span').text)
-        total_page = ((total_cnt-1)//10)+1
+        section_cnt = int(driver.find_element_by_xpath('//*[@id="content"]/div/div[3]/div[1]/div[1]/h3/span').text)
+        section_page = ((section_cnt-1)//10)+1
 
-        for i in range(1, total_page+1):
-            # refresh crawler dynamically
-            crawler.refresh_from_db()
-            if crawler.cancel_flag:
-                # administrator canceled this crawler
-                crawler.status = 'canceled {} {}/{}'.format(type, i, total_page)
-                crawler.save()
+        print('starting {}...'.format(type))
+        for i in range(1, section_page+1):
+            detail = '{} page {}/{} total {}/{} lectures'.format(type, i, section_page, total_fin, total_cnt)
+            if update(crawler, 'running', detail) is False:
+                print(type, crawler.status, crawler.cancel_flag)
                 return
 
             # goes to page i
             driver.execute_script('fnGotoPage({})'.format(i))
             # crawls a table of lectures in current page
-            print('====================={} page {}====================='.format(type, i))
+            print('='*20+'{} page {}/{}'.format(type, i, section_page)+'='*20)
             lectures = crawl(driver)
             # parses given data and saves it in DB
             parse(crawler.year, crawler.semester, lectures, '')
 
-            # change status of crawler and save
-            crawler.refresh_from_db()
-            crawler.status = 'running {} {}/{}'.format(type, i, total_page)
-            crawler.save()
+            total_fin += len(lectures)
+            total_page_fin += 1
 
-        print('finished {}'.format(type))
+        print('='*20+'finished {}'.format(type)+'='*20)
 
-    else:
-        for field in fid:
-            driver.find_element_by_xpath('//*[@id="srchOpenUpSbjtFldCd"]/option[{}]'.format(fid[field])).click()
-            driver.implicitly_wait(1)
-            for area in aid[field]:
-                driver.find_element_by_xpath('//*[@id="cond02"]/td[3]/select[2]/option[{}]'.format(aid[field][area])).click()
-                driver.implicitly_wait(1)
+    else: # type == '교양'
+        field_select = driver.find_element_by_xpath('//*[@id="srchOpenUpSbjtFldCd"]')
+        fields = [x.text.strip() for x in field_select.find_elements_by_tag_name('option')]
+        field_cnt = len(fields)
+
+        for i in range(2, field_cnt+1):
+            field = fields[i-1]
+            driver.find_element_by_xpath('//*[@id="srchOpenUpSbjtFldCd"]/option[{}]'.format(i)).click()
+
+            area_select = driver.find_element_by_xpath('//*[@id="cond02"]/td[3]/select[2]')
+            areas = [x.text.strip() for x in area_select.find_elements_by_tag_name('option')]
+            area_cnt = len(areas)
+
+            for j in range(2, area_cnt+1):
+                area = areas[j-1]
+                driver.find_element_by_xpath('//*[@id="cond02"]/td[3]/select[2]/option[{}]'.format(j)).click()
+                time.sleep(1)
 
                 driver.find_element_by_class_name('btn_search_ok').click()
                 driver.implicitly_wait(1)
 
-                #print(area, aid[field][area])
+                section_cnt = int(driver.find_element_by_xpath('//*[@id="content"]/div/div[3]/div[1]/div[1]/h3/span').text)
+                section_page = ((section_cnt - 1) // 10) + 1
 
-                total_cnt = int(driver.find_element_by_xpath('//*[@id="content"]/div/div[3]/div[1]/div[1]/h3/span').text)
-                total_page = ((total_cnt - 1) // 10) + 1
-
-                for i in range(1, total_page+1):
-                    # refresh crawler dynamically
-                    crawler.refresh_from_db()
-                    if crawler.cancel_flag:
-                        # administrator canceled this crawler
-                        crawler.status = 'canceled {} ({}-{}) {}/{}'.format(type, field, area, i, total_page)
-                        crawler.save()
+                for p in range(1, section_page+1):
+                    detail = '{} ({}-{}) {}/{} total {}/{} lectures'.format(type, field, area, p, section_page, total_fin, total_cnt)
+                    if update(crawler, 'running', detail) is False:
                         return
 
-                    # goes to page i
-                    driver.execute_script('fnGotoPage({})'.format(i))
+                    # goes to page p
+                    driver.execute_script('fnGotoPage({})'.format(p))
                     # crawls a table of lectures in current page
-                    print('====================={} ({}-{}) page {}====================='.format(type, field, area, i))
+                    print('='*20+'{} ({}-{}) page {}/{}'.format(type, field, area, p, section_page)+'='*20)
                     lectures = crawl(driver)
                     # parses given data and saves it in DB
                     parse(crawler.year, crawler.semester, lectures, field + '-' + area)
+                    # increments number of lectures and pages finished
+                    total_fin += len(lectures)
+                    total_page_fin += 1
 
-                    # change status of crawler and save
-                    crawler.refresh_from_db()
-                    crawler.status = 'running {} ({}-{}) {}/{}'.format(type, field, area, i, total_page)
-                    crawler.save()
-
-                print('finished {} ({}-{})'.format(type, field, area))
+                print('='*20+'finished {} ({}-{})'.format(type, field, area)+'='*20)
 
 
 def crawl(driver):
@@ -222,8 +228,6 @@ def crawl(driver):
                     department = ''
                     major = ''
 
-                #print('lecture:', columns[8].text, 'department:', department, 'major:', major)
-
                 lecture = {
                     'type': columns[1].text,
                     'name': columns[8].text,
@@ -243,12 +247,9 @@ def crawl(driver):
 
                 classroom = columns[12].text.split('-')
                 if len(classroom) == 3:
-                    #print(classroom)
-
                     if len(classroom[1]) == 1:
                         building = classroom[0] + '-' + classroom[1]
                         room_no = classroom[2]
-
                     else:
                         building = classroom[0]
                         room_no = classroom[1] + '-' + classroom[2]
@@ -277,12 +278,9 @@ def crawl(driver):
 
                 classroom = columns[2].text.split('-')
                 if len(classroom) == 3:
-                    #print(classroom)
-
                     if len(classroom[1]) == 1:
                         building = classroom[0] + '-' + classroom[1]
                         room_no = classroom[2]
-
                     else:
                         building = classroom[0]
                         room_no = classroom[1] + '-' + classroom[2]
@@ -304,8 +302,12 @@ def crawl(driver):
                 }
 
                 lecture['time_slots'].append(time_slot)
+
         except Exception as e:
             errors.append(str(e))
+
+    if lecture is not None:
+        lectures.append(lecture)
 
     return lectures
 
@@ -348,7 +350,7 @@ def parse(year, semester, lectures, field_name):
                                                     name=lecture['name'],
                                                     type=lecture['type'],
                                                     field=field_name,
-                                                    grade=int(lecture['grade'][0]),
+                                                    grade=int(lecture['grade'][0]) if not lecture['grade'] else 0,
                                                     credit=int(lecture['credit'].split('-')[0]),
                                                     college=college_instance,
                                                     department=department_instance,

@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
 
 from .models import Crawler
 
@@ -16,11 +17,19 @@ class TableSerializer(serializers.Serializer):
 
 class CrawlerSerializer(serializers.ModelSerializer):
     status = serializers.ReadOnlyField()
-    semester = serializers.ChoiceField(choices=['1학기', '여름학기', '2학기', '겨울학기'])
 
     class Meta:
         model = Crawler
-        exclude = ('cancel_flag',)
+        fields = '__all__'
+        read_only_fields = ('status', 'cancel_flag')
+
+    def validate(self, data):
+        request = self.context.get('request')
+        if request.method == 'POST':
+            if Crawler.objects.filter(status__startswith='creating').exists() or Crawler.objects.filter(status__startswith='running').exists():
+                raise ValidationError('There already exists active crawler')
+
+        return data
 
 
 class CrawlerDetailSerializer(CrawlerSerializer):

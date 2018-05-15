@@ -17,6 +17,7 @@ class TableView(generics.ListCreateAPIView):
     or Delete all instances for each table at once.
     """
     serializer_class = TableSerializer
+    permission_classes = (IsAdminUser,)
     app_labels = ('ttrs', 'manager')
 
     def get_models(self):
@@ -26,11 +27,9 @@ class TableView(generics.ListCreateAPIView):
                 models.append(model)
         return models
 
-    def get_queryset(self, models=None):
-        if models is None:
-            models = self.get_models()
+    def get_queryset(self):
         tables = []
-        for model in models:
+        for model in self.get_models():
             tables.append(dict(table_name=model.__name__, count=model.objects.count()))
         return tables
 
@@ -41,12 +40,16 @@ class TableView(generics.ListCreateAPIView):
         return serializer_class(*args, **kwargs)
 
     def create(self, request, *args, **kwargs):
-        names = request.data.getlist('tables', [])
-        models = self.get_models()
-        models = list(filter(lambda x: x.__name__ in names, models))
+        if isinstance(request.data, dict):
+            names = request.data['tables']
+            if names is None:
+                names = []
+        else:
+            names = request.data.getlist('tables', [])
+        models = list(filter(lambda x: x.__name__ in names, self.get_models()))
         for model in models:
             model.objects.all().delete()
-        return Response(self.get_queryset(models=models))
+        return Response(self.get_queryset())
 
 
 class CrawlerList(generics.ListCreateAPIView):
