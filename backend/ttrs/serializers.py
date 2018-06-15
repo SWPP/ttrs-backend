@@ -6,7 +6,7 @@ from rest_framework.exceptions import ValidationError
 from django.core.exceptions import ValidationError as DjangoValidationError, ObjectDoesNotExist
 
 from .models import Student, College, Department, Major, Course, Lecture, Evaluation, TimeTable, MyTimeTable, \
-    BookmarkedTimeTable, ReceivedTimeTable, TimeSlot, Classroom
+    BookmarkedTimeTable, ReceivedTimeTable, RecommendedTimeTable, TimeSlot, Classroom
 
 
 class StudentSerializer(serializers.ModelSerializer):
@@ -14,7 +14,7 @@ class StudentSerializer(serializers.ModelSerializer):
         model = Student
         fields = ('id', 'username', 'password', 'email', 'grade', 'college', 'department', 'major', 'not_recommends',
                   'my_time_tables', 'bookmarked_time_tables', 'received_time_tables')
-        read_only_fields = ('not_recommends', 'my_time_tables', 'bookmarked_time_tables', 'received_time_tables')
+        read_only_fields = ('my_time_tables', 'bookmarked_time_tables', 'received_time_tables')
         extra_kwargs = {
             'email': {'required': True, 'allow_null': False, 'allow_blank': False}
         }
@@ -53,9 +53,12 @@ class StudentSerializer(serializers.ModelSerializer):
         if 'password' not in data:
             # password not changed
             return data
-        tmp_user = User(username=data['username'], email=data['email'])
         try:
-            validate_password(data['password'], user=tmp_user)
+            if self.instance:
+                validate_password(data['password'], user=self.instance)
+            else:
+                tmp_user = User(username=data['username'], email=data['email'])
+                validate_password(data['password'], user=tmp_user)
         except DjangoValidationError as ve:
             raise ValidationError({'password': ve.messages})
         data['password'] = make_password(data['password'])
@@ -96,6 +99,8 @@ class LectureSerializer(serializers.ModelSerializer):
 
 
 class EvaluationSerializer(serializers.ModelSerializer):
+    author = serializers.StringRelatedField()
+
     class Meta:
         model = Evaluation
         fields = '__all__'
@@ -106,12 +111,28 @@ class EvaluationSerializer(serializers.ModelSerializer):
             raise ValidationError("The rate should be an integer between 1 and 10 inclusive.")
         return rate
 
+    def validate_lecture(self, lecture):
+        # ignore PUT, PATCH
+        if self.instance is not None:
+            return lecture
+
+        # Only one evaluation per lecture
+        username = self.context['request'].user.username
+        student = Student.objects.get_by_natural_key(username)
+        evaluation = Evaluation.objects.filter(author=student, lecture=lecture).first()
+        if evaluation is not None:
+            raise ValidationError('You can make at most one evaluation per lecture. '
+                                  'Existing evaluation id: {}'.format(evaluation.id))
+        return lecture
+
 
 class EvaluationDetailSerializer(EvaluationSerializer):
     lecture = serializers.ReadOnlyField(source='lecture.id')
 
 
 class TimeTableSerializer(serializers.ModelSerializer):
+    credit_sum = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = TimeTable
         fields = '__all__'
@@ -141,6 +162,9 @@ class TimeTableSerializer(serializers.ModelSerializer):
             validated_data['semester'] = self.semester
         return super(TimeTableSerializer, self).create(validated_data)
 
+    def get_credit_sum(self, obj):
+        return sum([lecture.course.credit for lecture in obj.lectures.all()])
+
 
 class MyTimeTableSerializer(TimeTableSerializer):
     class Meta(TimeTableSerializer.Meta):
@@ -160,9 +184,17 @@ class BookmarkedTimeTableSerializer(TimeTableSerializer):
 
 
 class ReceivedTimeTableSerializer(TimeTableSerializer):
+    sender = serializers.StringRelatedField()
+
     class Meta(TimeTableSerializer.Meta):
         model = ReceivedTimeTable
         read_only_fields = TimeTableSerializer.Meta.read_only_fields+('sender', 'received_at')
+
+
+class RecommendedTimeTableSerializer(TimeTableSerializer):
+    class Meta(TimeTableSerializer.Meta):
+        model = RecommendedTimeTable
+        read_only_fields = TimeTableSerializer.Meta.read_only_fields+('score', 'recommended_at')
 
 
 class CopyTimeTableSerializer(serializers.Serializer):
@@ -177,7 +209,7 @@ class CopyTimeTableSerializer(serializers.Serializer):
             TimeTable.objects.get(pk=time_table_id)
         except ObjectDoesNotExist:
             raise ValidationError("There is no time table with this id.")
-        table_models = (MyTimeTable, BookmarkedTimeTable, ReceivedTimeTable)
+        table_models = (MyTimeTable, BookmarkedTimeTable, ReceivedTimeTable, RecommendedTimeTable)
         if not any([model.objects.filter(owner=self.owner, pk=time_table_id) for model in table_models]):
             raise ValidationError("You can send only your tables.")
         return time_table_id
@@ -194,15 +226,15 @@ class SendTimeTableSerializer(CopyTimeTableSerializer):
         return receiver_name
 
 
-class MajorSerializer(serializers.ModelSerializer):
-    college = serializers.SerializerMethodField()
+class SemesterSerializer(serializers.Serializer):
+    year = serializers.IntegerField()
+    semester = serializers.CharField()
 
+
+class MajorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Major
         fields = '__all__'
-
-    def get_college(self, major):
-        return major.department.college_id
 
 
 class DepartmentSerializer(serializers.ModelSerializer):

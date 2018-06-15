@@ -1,7 +1,19 @@
 from django.contrib.auth.models import User, UserManager
 from django.db import models
+from django.conf import settings
+from django.db.models import Lookup, Field, Avg
 
-semester_choices = (('1학기', '1학기'), ('2학기', '2학기'), ('여름학기', '여름학기'), ('겨울학기', '겨울학기'))
+
+@Field.register_lookup
+class Abbreviation(Lookup):
+    lookup_name = 'abbrev'
+
+    def as_sql(self, compiler, connection):
+        lhs, lhs_params = self.process_lhs(compiler, connection)
+        rhs, rhs_params = self.process_rhs(connection, connection)
+        rhs_params[0] = '%'+'%'.join(rhs_params[0])+'%'
+        params = lhs_params + rhs_params
+        return '%s like %s' % (lhs, rhs), params
 
 
 class Student(User):
@@ -40,11 +52,20 @@ class Lecture(models.Model):
     time_slots = models.ManyToManyField('ttrs.TimeSlot', related_name='lectures', blank=True)
 
     year = models.PositiveSmallIntegerField()
-    semester = models.CharField(max_length=10, choices=semester_choices)
+    semester = models.CharField(max_length=10, choices=settings.SEMESTER_CHOICES)
     number = models.CharField(max_length=10)
 
     instructor = models.CharField(max_length=20)
     note = models.TextField(blank=True)
+
+    rating = models.FloatField(default=0)
+
+    def update_rating(self):
+        if self.evaluations.count():
+            self.rating = sum([e.rate for e in self.evaluations.all()])/self.evaluations.count()
+        else:
+            self.rating = 0
+        self.save()
 
     @staticmethod
     def have_same_course(lectures):
@@ -91,6 +112,9 @@ class Lecture(models.Model):
     def __str__(self):
         return '{}-{} ({}:{})'.format(self.course, self.instructor, self.year, self.semester)
 
+    class Meta:
+        unique_together = ('course', 'year', 'semester', 'number', )
+
 
 class Evaluation(models.Model):
     author = models.ForeignKey('ttrs.Student', related_name='evaluations', on_delete=models.DO_NOTHING)
@@ -98,9 +122,26 @@ class Evaluation(models.Model):
     rate = models.PositiveSmallIntegerField()
     comment = models.TextField()
     like_it = models.ManyToManyField('ttrs.Student', related_name='like_its', blank=True)
+    evaluated_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if self.lecture.evaluations.count():
+            self.lecture.rating = self.lecture.evaluations.aggregate(Avg('rate'))['rate__avg']
+        else:
+            self.lecture.rating = 0
+        models.Model.save(self, *args, **kwargs)
+        self.lecture.update_rating()
+
+    def delete(self, *args, **kwargs):
+        lecture = self.lecture
+        models.Model.delete(self, *args, **kwargs)
+        lecture.update_rating()
 
     def __str__(self):
         return '{}-{}'.format(self.lecture, self.author)
+
+    class Meta:
+        unique_together = ('author', 'lecture')
 
 
 class TimeTable(models.Model):
@@ -108,7 +149,7 @@ class TimeTable(models.Model):
     memo = models.TextField(blank=True)
 
     year = models.PositiveSmallIntegerField()
-    semester = models.CharField(max_length=10, choices=semester_choices)
+    semester = models.CharField(max_length=10, choices=settings.SEMESTER_CHOICES)
     lectures = models.ManyToManyField('ttrs.Lecture', related_name='lectures', blank=True)
 
     def __init__(self, *args, other=None, **kwargs):
@@ -148,6 +189,12 @@ class ReceivedTimeTable(TimeTable):
     sender = models.ForeignKey('ttrs.Student', related_name='sent_time_tables', on_delete=models.SET_NULL, null=True)
     sent_at = models.DateTimeField(auto_now_add=True)
     received_at = models.DateTimeField(null=True, blank=True)
+
+
+class RecommendedTimeTable(TimeTable):
+    owner = models.ForeignKey('ttrs.Student', related_name='recommended_time_tables', on_delete=models.CASCADE)
+    score = models.IntegerField(default=0)
+    recommended_at = models.DateTimeField(auto_now_add=True)
 
 
 class TimeSlot(models.Model):

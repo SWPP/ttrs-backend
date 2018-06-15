@@ -105,6 +105,14 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# Email confirmation
+
+EMAIL_USE_TLS = True
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_HOST_USER = 'snuttrs@gmail.com'
+EMAIL_HOST_PASSWORD = 'throdnjstlfshekq'
+EMAIL_PORT = 587
+
 
 # Internationalization
 # https://docs.djangoproject.com/en/2.0/topics/i18n/
@@ -126,3 +134,7 @@ USE_TZ = True
 STATIC_URL = '/static/'
 
 STATIC_ROOT = os.path.join(BASE_DIR, "static/")
+
+# Custom constants and settings
+
+SEMESTER_CHOICES = (('1학기', '1학기'), ('여름학기', '여름학기'), ('2학기', '2학기'), ('겨울학기', '겨울학기'))

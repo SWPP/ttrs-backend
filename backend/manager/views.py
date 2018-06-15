@@ -1,6 +1,7 @@
 import threading
 
 from django.apps import apps
+from django.http import QueryDict
 from rest_framework import generics
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
@@ -40,12 +41,12 @@ class TableView(generics.ListCreateAPIView):
         return serializer_class(*args, **kwargs)
 
     def create(self, request, *args, **kwargs):
-        if isinstance(request.data, dict):
+        if isinstance(request.data, QueryDict):
+            names = request.data.getlist('tables', [])
+        else:
             names = request.data['tables']
             if names is None:
                 names = []
-        else:
-            names = request.data.getlist('tables', [])
         models = list(filter(lambda x: x.__name__ in names, self.get_models()))
         for model in models:
             model.objects.all().delete()
