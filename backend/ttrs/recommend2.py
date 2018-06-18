@@ -289,12 +289,7 @@ def init(options: QueryDict, student: Student):
         raise ValidationError({'detail': 'Some options are not valid.'})
 
     # Load lectures and filter by blocks option
-    while True:
-        whole_lectures, whole_compatible = load(info['year'], info['semester'])
-        if whole_lectures is None or whole_compatible is None:
-            save(info['year'], info['semester'])
-        else:
-            break
+    whole_lectures, whole_compatible = load(info['year'], info['semester'])
     available = []
     for i, lecture in enumerate(whole_lectures):
         available.append(contains(info['blocks'], lecture.time_slot_set))
@@ -339,14 +334,15 @@ def load(year, semester):
     Load list of SimpleLecture object and their compatible lecture list
     from external resource  (using pickle).
     """
-    try:
-        with open('lectures{}{}.pickle'.format(year, semester), 'rb') as f:
-            whole_lectures = pickle.load(f)
-        with open('compatible{}{}.pickle'.format(year, semester), 'rb') as f:
-            whole_compatible = pickle.load(f)
-    except Exception as e:
-        print(e)
-        return None, None
+    while True:
+        try:
+            with open('lectures{}{}.pickle'.format(year, semester), 'rb') as f:
+                whole_lectures = pickle.load(f)
+            with open('compatible{}{}.pickle'.format(year, semester), 'rb') as f:
+                whole_compatible = pickle.load(f)
+            break
+        except Exception as e:
+            save(year, semester)
     return whole_lectures, whole_compatible
 
 
