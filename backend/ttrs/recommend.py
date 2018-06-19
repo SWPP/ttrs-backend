@@ -1,26 +1,28 @@
-import random, heapq
+import heapq
 from functools import reduce
 
-from django.db.models import Max, Min, Q
-from ttrs.models import Course, Lecture, RecommendedTimeTable
+from django.db.models import Q
+from django.http import QueryDict
+from rest_framework.exceptions import ValidationError
+from ttrs.models import Course, Lecture, RecommendedTimeTable, Student
+
+option_fields = [
+    'year',
+    'semester',
+    'avoid_successive',
+    'avoid_void',
+    'avoid_first',
+    'jeonpil',
+    'jeonseon',
+    'gyoyang',
+    'credit',
+    'blocks',
+]
 
 
-# Option fields and their default values
-option_field = {
-    'year': 2018,
-    'semester': '1학기',
-    'expected_credit': 15,
-    'credit_weight': 0,
-    'distance_weight': 0,
-    'evaluation_weight': 0,
-    'first_period_weight': 0,
-    'serial_lectures_weight': 0,
-}
-
-
-def recommend(options, student):
+def recommend(options: QueryDict, student: Student):
     info = init(options, student)
-    # print(info)
+
     recommends = []
 
     candidates = build_candidates(info)
@@ -42,22 +44,27 @@ def init(options, student):
     RecommendedTimeTable.objects.filter(owner=student).delete()
 
     info = {}
-    # Collect information
-    for option in option_field.keys():
-        info[option] = options[option] if options.get(option) else option_field[option]
-        if option != 'semester':
-            info[option] = int(info[option])
-
-    # lectures = Lecture.objects.filter(year=info['year'], semester=info['semester'])
-    # info['min_id'] = lectures.aggregate(min_id=Min('id'))['min_id']
-    # info['max_id'] = lectures.aggregate(max_id=Max('id'))['max_id']
-
-    # Collect information from student
-    info['student_grade'] = student.grade
-    info['student_college'] = student.college
-    info['student_department'] = student.department if student.department else None
-    info['student_major'] = student.major if student.major else None
-    info['not_recommends'] = student.not_recommends
+    for option in option_fields:
+        if option not in options:
+            raise ValidationError({'detail': 'Necessary options are not provided.'})
+    try:
+        info['student_grade'] = student.grade
+        info['student_college'] = student.college
+        info['student_department'] = student.department if student.department else None
+        info['student_major'] = student.major if student.major else None
+        info['not_recommends'] = student.not_recommends
+        info['year'] = int(options.get('year'))
+        info['semester'] = options.get('semester')
+        info['credit_weight'] = 1
+        info['distance_weight'] = 1
+        info['serial_lectures_weight'] = 1*bool(options.get('avoid_successive'))
+        info['void_lectures_weight'] = 1*bool(options.get('avoid_void'))
+        info['first_period_weight'] = 1*bool(options.get('avoid_first'))
+        info['expected_credit'] = int(options.get('credit'))
+        info['blocks'] = [[list(map(int, slot.split(':'))) for slot in slots.split(',')] if slots else [] for slots in
+                          options.get('blocks').split('|')]
+    except Exception:
+        raise ValidationError({'detail': 'Some options are not valid.'})
 
     return info
 
@@ -113,38 +120,28 @@ def get_course_score(course, info):
     return score
 
 
-max_expect = 0
-max_score = 0
-max_lectures = []
-
-
 def branch_and_bound_help(initial_lectures, initial_credit, seed_lectures, info):
     """
     This is a wrapper function for branch_and_bound.
     """
-    global max_expect
-    global max_score
-    global max_lectures
 
-    max_expect = 0
-    max_score = 0
-    max_lectures = []
+    maximum = {
+        'expect': 0,
+        'score': 0,
+        'lectures': [],
+    }
 
     # print('!!!!!seed:', initial_lectures)
-    branch_and_bound(initial_lectures, initial_credit, seed_lectures, info)
+    branch_and_bound(initial_lectures, initial_credit, seed_lectures, info, maximum)
     # print('!!!!!max_lectures:', max_lectures)
 
-    return max_lectures
+    return maximum['lectures']
 
 
-def branch_and_bound(current_lectures, current_credits, seed_lectures, info):
+def branch_and_bound(current_lectures, current_credits, seed_lectures, info, maximum):
     """
     Recursively searches through possible lecture sets using basic branch and bound Algorithm
     """
-    global max_expect
-    global max_score
-    global max_lectures
-
     expected_scores = []
     next = []
     for seed in seed_lectures:
@@ -159,23 +156,23 @@ def branch_and_bound(current_lectures, current_credits, seed_lectures, info):
             next.append((next_lectures, next_credits))
             expected_score = upper_bound(next_lectures, info)
             expected_scores.append(expected_score)
-            if max_expect < expected_score:
-                max_expect = expected_score
+            if maximum['expect'] < expected_score:
+                maximum['expect'] = expected_score
         else:
             # In case we cannot add more lectures; that is, we are in the leaf node.
             current_score = get_score(current_lectures, info)
-            if max_score < current_score:
-                max_score = current_score
-                max_lectures = current_lectures
+            if maximum['score'] < current_score:
+                maximum['score'] = current_score
+                maximum['lectures'] = current_lectures
 
     while len(expected_scores) != 0:
         index = expected_scores.index(max(expected_scores))
         expected_score = expected_scores[index]
-        if max_score < expected_score:
+        if maximum['score'] < expected_score:
             # We branch only if expected score is higher than current max score.
             next_lectures = next[index][0]
             next_credits = next[index][1]
-            branch_and_bound(next_lectures, next_credits, seed_lectures, info)
+            branch_and_bound(next_lectures, next_credits, seed_lectures, info, maximum)
 
         del expected_scores[index]
         del next[index]
